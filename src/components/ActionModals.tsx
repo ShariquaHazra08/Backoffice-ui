@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
-import { AlertTriangle, AlertOctagon, X, Loader2 } from 'lucide-react';
-import type { ProtectiveBookRow } from '../types/oms';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, X, Loader2 } from 'lucide-react';
+import { hasEntryAppOrder, legCanBeCancelled, type ParentOrderRow, type ProtectiveBookRow } from '../types/oms';
+import { omsApi } from '../api/omsApi';
 
 interface ActionModalProps {
   isOpen: boolean;
-  type: 'CANCEL_LEG' | 'FORCE_EXIT' | 'CANCEL_ENTRY' | null;
+  type: 'CANCEL_LEG' | null;
   order: ProtectiveBookRow | null;
   onClose: () => void;
   onConfirm: (reason: string) => Promise<void>;
@@ -42,37 +43,19 @@ export const ActionModal: React.FC<ActionModalProps> = ({
     }
   };
 
-  const isExit = type === 'FORCE_EXIT';
-  const isCancelLeg = type === 'CANCEL_LEG';
-  const isCancelEntry = type === 'CANCEL_ENTRY';
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
-      <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden text-slate-200">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
+      <div className="relative w-full max-w-lg bg-white border border-[#E6E8EC] rounded-xl shadow-sm overflow-hidden text-[#1A1D23]">
         {/* Header */}
-        <div
-          className={`flex items-center justify-between px-6 py-4 border-b ${
-            isExit
-              ? 'bg-rose-950/40 border-rose-900/50 text-rose-300'
-              : 'bg-amber-950/40 border-amber-900/50 text-amber-300'
-          }`}
-        >
+        <div className="flex items-center justify-between px-6 py-4 border-b bg-amber-50 border-amber-100 text-[#1A1D23]">
           <div className="flex items-center space-x-2">
-            {isExit ? (
-              <AlertOctagon className="w-5 h-5 text-rose-400" />
-            ) : (
-              <AlertTriangle className="w-5 h-5 text-amber-400" />
-            )}
-            <h3 className="font-semibold text-base">
-              {isExit && 'Force Exit / Square-Off Position'}
-              {isCancelLeg && `Cancel ${order.legRole} Protective Leg`}
-              {isCancelEntry && 'Cancel Unfilled Entry Order'}
-            </h3>
+            <AlertTriangle className="w-5 h-5 text-amber-400" />
+            <h3 className="font-semibold text-base">Cancel {order.legRole} Protective Leg</h3>
           </div>
           <button
             onClick={onClose}
             disabled={loading}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            className="p-1 rounded-lg text-[#5C6570] hover:text-[#1A1D23] hover:bg-[#EEF1F4] transition"
           >
             <X className="w-5 h-5" />
           </button>
@@ -80,67 +63,55 @@ export const ActionModal: React.FC<ActionModalProps> = ({
 
         {/* Content */}
         <form onSubmit={handleConfirm} className="p-6 space-y-4">
-          <div className="bg-slate-950/80 rounded-lg p-3 text-xs border border-slate-800 space-y-1.5">
+          <div className="bg-white rounded-lg p-3 text-xs border border-[#E6E8EC] space-y-1.5">
             <div className="flex justify-between">
-              <span className="text-slate-400">User ID:</span>
-              <span className="font-mono text-white font-medium">{order.userID}</span>
+              <span className="text-[#5C6570]">User ID:</span>
+              <span className="font-mono text-[#1A1D23] font-medium">{order.userID}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">OMS Order ID:</span>
-              <span className="font-mono text-white">{order.omsOrderID}</span>
+              <span className="text-[#5C6570]">OMS Order ID:</span>
+              <span className="font-mono text-[#1A1D23]">{order.omsOrderID}</span>
             </div>
-            {isCancelLeg && (
+            <div className="flex justify-between">
+              <span className="text-[#5C6570]">Protective Leg ID:</span>
+              <span className="font-mono text-indigo-800">OMSLEG-{order.omsLegID}</span>
+            </div>
+            {hasEntryAppOrder(order.entryAppOrderID) && (
               <div className="flex justify-between">
-                <span className="text-slate-400">Synthetic AppOrderID:</span>
-                <span className="font-mono text-indigo-400">OMSLEG-{order.omsLegID}</span>
-              </div>
-            )}
-            {order.entryAppOrderID > 0 && (
-              <div className="flex justify-between">
-                <span className="text-slate-400">Symphony Entry ID:</span>
-                <span className="font-mono text-slate-300">{order.entryAppOrderID}</span>
+                <span className="text-[#5C6570]">Symphony Entry ID:</span>
+                <span className="font-mono text-[#3A4250]">{order.entryAppOrderID}</span>
               </div>
             )}
             <div className="flex justify-between">
-              <span className="text-slate-400">Instrument:</span>
-              <span className="font-mono text-slate-300">
-                {order.exchangeSegment}:{order.exchangeInstrumentID}
+              <span className="text-[#5C6570]">Instrument:</span>
+              <span className="font-medium text-[#3A4250]">
+                {order.displayName || '—'}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">Quantity / Side:</span>
-              <span className="font-mono font-medium text-emerald-400">
+              <span className="text-[#5C6570]">Quantity / Side:</span>
+              <span className="font-mono font-medium text-emerald-800">
                 {order.qty} Qty ({order.entrySide})
               </span>
             </div>
+            {order.filledQty !== undefined && (
+              <div className="flex justify-between">
+                <span className="text-[#5C6570]">Filled Quantity:</span>
+                <span className={`font-mono font-medium ${order.filledQty > 0 ? 'text-emerald-800' : 'text-[#5C6570]'}`}>
+                  {order.filledQty} / {order.qty}
+                </span>
+              </div>
+            )}
           </div>
 
-          <div
-            className={`p-3 rounded-lg text-xs leading-relaxed border ${
-              isExit
-                ? 'bg-rose-950/30 border-rose-900/40 text-rose-300'
-                : 'bg-amber-950/30 border-amber-900/40 text-amber-300'
-            }`}
-          >
-            {isExit && (
-              <p>
-                <strong>Warning:</strong> This will place an immediate MARKET square-off order on Symphony to close the filled position on behalf of user <code>{order.userID}</code>, and will disarm any active Stop-Loss/Target legs.
-              </p>
-            )}
-            {isCancelLeg && (
-              <p>
-                <strong>Notice:</strong> This cancels leg <code>OMSLEG-{order.omsLegID}</code> ({order.legRole}) in PostgreSQL and removes the trigger from Redis. The open position itself remains unchanged.
-              </p>
-            )}
-            {isCancelEntry && (
-              <p>
-                <strong>Notice:</strong> This cancels the unfilled entry order with Symphony and marks the entire OMS parent as CANCELLED.
-              </p>
-            )}
+          <div className="p-3 rounded-lg text-xs leading-relaxed border bg-amber-50 border-amber-200 text-amber-900">
+            <p>
+              <strong>Notice:</strong> This cancels leg <code>OMSLEG-{order.omsLegID}</code> ({order.legRole}) in PostgreSQL and removes the trigger from Redis. The open position itself remains unchanged.
+            </p>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1">
+            <label className="block text-xs font-medium text-[#3A4250] mb-1">
               Backoffice Reason (Required for Audit Trail)
             </label>
             <textarea
@@ -149,12 +120,12 @@ export const ActionModal: React.FC<ActionModalProps> = ({
               placeholder="e.g., Customer requested manual square-off via ticket #4819, order entered with typo"
               rows={3}
               required
-              className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              className="w-full px-3 py-2 text-xs bg-white border border-[#D8DCE3] rounded-lg text-[#1A1D23] placeholder-[#9AA3B2] focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             />
           </div>
 
           {error && (
-            <div className="p-2.5 rounded-lg bg-red-950/60 border border-red-800 text-red-300 text-xs">
+            <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs">
               {error}
             </div>
           )}
@@ -164,26 +135,169 @@ export const ActionModal: React.FC<ActionModalProps> = ({
               type="button"
               onClick={onClose}
               disabled={loading}
-              className="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition"
+              className="px-4 py-2 text-xs font-medium text-[#3A4250] hover:text-[#1A1D23] hover:bg-[#EEF1F4] rounded-lg transition"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={loading}
-              className={`inline-flex items-center px-4 py-2 text-xs font-semibold rounded-lg shadow-sm text-white transition ${
-                isExit
-                  ? 'bg-rose-600 hover:bg-rose-500 disabled:bg-rose-900'
-                  : 'bg-amber-600 hover:bg-amber-500 disabled:bg-amber-900'
-              }`}
+              className="inline-flex items-center px-4 py-2 text-xs font-semibold rounded-lg shadow-sm text-white transition bg-amber-600 hover:bg-amber-500 disabled:bg-amber-950 disabled:text-amber-400 disabled:cursor-not-allowed"
             >
               {loading && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
-              {isExit && 'Confirm Force Exit'}
-              {isCancelLeg && 'Confirm Cancel Leg'}
-              {isCancelEntry && 'Confirm Cancel Entry'}
+              Confirm Cancel Leg
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+};
+
+export const CancellableLegsModal: React.FC<{
+  parent: ParentOrderRow | null;
+  refreshToken: number;
+  onClose: () => void;
+  onCancelSelected: (legs: ProtectiveBookRow[], reason: string) => Promise<void>;
+}> = ({ parent, refreshToken, onClose, onCancelSelected }) => {
+  const [legs, setLegs] = useState<ProtectiveBookRow[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [reason, setReason] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!parent) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setSelected(new Set());
+    omsApi.getChildLegs(String(parent.omsOrderID))
+      .then((rows) => {
+        if (!cancelled) setLegs(rows.filter(legCanBeCancelled));
+      })
+      .catch((err: { message?: string }) => {
+        if (!cancelled) setError(err?.message || 'Failed to load legs');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [parent, refreshToken]);
+
+  if (!parent) return null;
+
+  const allSelected = legs.length > 0 && legs.every((leg) => selected.has(leg.omsLegID));
+  const toggleAll = () => {
+    setSelected(allSelected ? new Set() : new Set(legs.map((leg) => leg.omsLegID)));
+  };
+  const toggleOne = (legId: number) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(legId)) next.delete(legId);
+      else next.add(legId);
+      return next;
+    });
+  };
+
+  const handleCancel = async () => {
+    const chosen = legs.filter((leg) => selected.has(leg.omsLegID));
+    if (chosen.length === 0) return;
+    if (!reason.trim()) {
+      setError('Please provide a reason.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onCancelSelected(chosen, reason.trim());
+      setReason('');
+      setSelected(new Set());
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Cancel failed';
+      setError(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
+      <div className="relative w-full max-w-2xl bg-white border border-[#E6E8EC] rounded-xl shadow-sm overflow-hidden text-[#1A1D23]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#E6E8EC]">
+          <h3 className="font-semibold text-base">Cancel legs for OMS order {parent.omsOrderID}</h3>
+          <button type="button" onClick={onClose} className="p-1 rounded-lg text-[#5C6570] hover:text-[#1A1D23] hover:bg-[#EEF1F4] transition" aria-label="Close">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 max-h-[60vh] overflow-auto">
+          {loading ? (
+            <p className="py-8 text-center text-xs font-mono text-[#5C6570]">Loading legs…</p>
+          ) : error && legs.length === 0 ? (
+            <p className="py-8 text-center text-xs text-rose-700">{error}</p>
+          ) : legs.length === 0 ? (
+            <p className="py-8 text-center text-sm text-[#1A1D23]">No legs can be cancelled for this order.</p>
+          ) : (
+            <table className="w-full text-left text-xs text-[#3A4250]">
+              <thead className="text-[11px] uppercase tracking-wider text-[#5C6570] font-mono">
+                <tr>
+                  <th className="py-2 px-2 w-8">
+                    <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all legs" className="accent-rose-600" />
+                  </th>
+                  <th className="py-2 px-2">Leg id</th>
+                  <th className="py-2 px-2">Role</th>
+                  <th className="py-2 px-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {legs.map((leg) => (
+                  <tr key={leg.omsLegID} className="border-t border-[#EEF1F4]">
+                    <td className="py-2 px-2">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(leg.omsLegID)}
+                        onChange={() => toggleOne(leg.omsLegID)}
+                        aria-label={`Select leg ${leg.omsLegID}`}
+                        className="accent-rose-600"
+                      />
+                    </td>
+                    <td className="py-2 px-2 font-mono">{leg.omsLegID}</td>
+                    <td className="py-2 px-2 font-mono">{leg.legRole}</td>
+                    <td className="py-2 px-2 font-mono">{leg.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        {legs.length > 0 && (
+          <div className="px-4 py-3 border-t border-[#E6E8EC] space-y-3">
+            <label className="block text-xs font-medium text-[#3A4250]">
+              Reason
+              <textarea
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                rows={2}
+                className="mt-1 w-full px-3 py-2 text-xs bg-white border border-[#D8DCE3] rounded-lg text-[#1A1D23] focus:outline-hidden focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
+              />
+            </label>
+            {error && <p className="text-xs text-rose-700">{error}</p>}
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void handleCancel()}
+                disabled={selected.size === 0 || submitting}
+                className="inline-flex items-center px-3 py-1.5 rounded-md bg-white hover:bg-rose-50 border border-rose-300 text-[11px] font-semibold text-rose-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {submitting && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

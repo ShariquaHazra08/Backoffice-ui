@@ -1,16 +1,18 @@
-import axios from 'axios';
 import type {
+  ParentOrderRow,
   ProtectiveBookRow,
   CancelOrderPayload,
-  ExitOrderPayload,
-  UserSummary,
   PaginatedOrderHistoryResponse,
   OrderHistoryFilterParams,
+  AuditEventPayload,
 } from '../types/oms';
 
 export const getApiConfig = () => {
-  const baseUrl = localStorage.getItem('oms_api_url') || import.meta.env.VITE_OMS_BASE_URL || '/api/v1/oms';
-  const internalKey = localStorage.getItem('oms_internal_key') || import.meta.env.VITE_OMS_INTERNAL_KEY || '';
+  const fromEnv = String(import.meta.env.VITE_OMS_BASE_URL || '').trim();
+  const fromSettings = localStorage.getItem('oms_api_url') || '';
+  const baseUrl = fromEnv || fromSettings || '/api/v1/oms';
+  const keyFromEnv = String(import.meta.env.VITE_OMS_INTERNAL_KEY || '').trim();
+  const internalKey = keyFromEnv || localStorage.getItem('oms_internal_key') || '';
   return { baseUrl, internalKey };
 };
 
@@ -19,35 +21,119 @@ export const setApiConfig = (baseUrl: string, internalKey: string) => {
   localStorage.setItem('oms_internal_key', internalKey);
 };
 
-const createClient = () => {
-  const { baseUrl, internalKey } = getApiConfig();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  };
-  if (internalKey) {
-    headers['X-Internal-Key'] = internalKey;
+type JsonBody = Record<string, unknown> | unknown;
+
+const formatApiError = async (res: Response): Promise<Error> => {
+  try {
+    const data = await res.json();
+    const msg =
+      (data as any)?.message ||
+      (data as any)?.error ||
+      `Server Error (HTTP ${res.status})`;
+    return new Error(msg);
+  } catch {
+    return new Error(`Server Error (HTTP ${res.status})`);
   }
-  return axios.create({
-    baseURL: baseUrl,
-    headers,
-    timeout: 10000,
+};
+
+const request = async <T = any>(
+  url: string,
+  options: {
+    method?: string;
+    body?: JsonBody;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+    baseURL?: string;
+  } = {}
+): Promise<T> => {
+  const { method = 'GET', body, headers = {}, timeoutMs = 10000, baseURL = '' } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${baseURL}${url}`, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...headers,
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      throw await formatApiError(res);
+    }
+
+    if (res.status === 204) return undefined as T;
+    const text = await res.text();
+    if (!text) return undefined as T;
+    return JSON.parse(text) as T;
+  } catch (err: any) {
+    if (err?.name === 'AbortError' || err instanceof TypeError) {
+      throw new Error('OMS Backend unreachable. Please ensure the backend service is running.');
+    }
+    if (err instanceof Error && err.message) throw err;
+    throw new Error('OMS Backend unreachable. Please ensure the backend service is running.');
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+type Envelope<T> = {
+  success?: boolean;
+  message?: string;
+  data?: T;
+  error?: string;
+};
+
+const omsBase = () => getApiConfig().baseUrl.replace(/\/$/, '');
+
+const healthUrl = () => {
+  const base = omsBase();
+  if (/^https?:\/\//i.test(base)) {
+    return `${new URL(base).origin}/health`;
+  }
+  return '/health';
+};
+
+const authHeaders = (): Record<string, string> => {
+  const { internalKey } = getApiConfig();
+  return internalKey ? { 'X-Internal-Key': internalKey } : {};
+};
+
+const omsRequest = async <T>(
+  path: string,
+  options: { method?: string; body?: JsonBody; timeoutMs?: number } = {}
+): Promise<Envelope<T>> => {
+  return request<Envelope<T>>(path.startsWith('/') ? path : `/${path}`, {
+    method: options.method,
+    body: options.body,
+    headers: authHeaders(),
+    timeoutMs: options.timeoutMs ?? 10000,
+    baseURL: omsBase(),
   });
 };
 
-const formatApiError = (err: any): Error => {
-  if (err.response) {
-    const msg =
-      err.response.data?.message ||
-      err.response.data?.error ||
-      `Server Error (HTTP ${err.response.status})`;
-    return new Error(msg);
-  }
-  if (err.request) {
-    return new Error('OMS Worker unreachable (:8089). Please ensure the backend is running.');
-  }
-  return new Error(err.message || 'Unknown network error');
+const omsClientPost = async (path: string, payload: JsonBody) => {
+  return omsRequest(path, { method: 'POST', body: payload });
 };
+
+const normalizeParentRow = (r: any): ParentOrderRow => ({
+  omsOrderID: Number(r.omsOrderID ?? r.omsorderid ?? 0),
+  userID: String(r.userID ?? r.userid ?? ''),
+  clientID: String(r.clientID ?? r.clientid ?? ''),
+  productType: String(r.productType ?? r.producttype ?? ''),
+  exchangeSegment: String(r.exchangeSegment ?? r.exchangesegment ?? ''),
+  exchangeInstrumentID: Number(r.exchangeInstrumentID ?? r.exchangeinstrumentid ?? 0),
+  displayName: String(r.displayName ?? r.displayname ?? ''),
+  parentStatus: String(r.parentStatus ?? r.parentstatus ?? ''),
+  entryValidity: String(r.entryValidity ?? r.entryvalidity ?? ''),
+  validityUntil: r.validityUntil || r.validityuntil || undefined,
+  createdAt: String(r.createdAt ?? r.createdat ?? ''),
+  updatedAt: String(r.updatedAt ?? r.updatedat ?? ''),
+});
 
 const normalizeOrderRow = (r: any): ProtectiveBookRow => ({
   omsLegID: Number(r.omsLegID ?? r.omslegid ?? 0),
@@ -57,160 +143,106 @@ const normalizeOrderRow = (r: any): ProtectiveBookRow => ({
   entrySide: String(r.entrySide ?? r.entryside ?? 'BUY'),
   orderType: String(r.orderType ?? r.ordertype ?? 'MARKET'),
   qty: Number(r.qty ?? 0),
+  filledQty: Number(r.filledQty ?? r.filledqty ?? 0),
+  limitPrice: Number(r.limitPrice ?? r.limitprice ?? 0),
   triggerPrice: Number(r.triggerPrice ?? r.triggerprice ?? 0),
   stopPrice: Number(r.stopPrice ?? r.stopprice ?? 0),
   trailPoints: Number(r.trailPoints ?? r.trailpoints ?? 0),
   peakLTP: Number(r.peakLTP ?? r.peakltp ?? 0),
   tpPoints: Number(r.tpPoints ?? r.tppoints ?? 0),
   limitOffset: Number(r.limitOffset ?? r.limitoffset ?? 0),
-  exchangeSegment: String(r.exchangeSegment ?? r.exchangesegment ?? 'NSEFO'),
+  exchangeSegment: String(r.exchangeSegment ?? r.exchangesegment ?? ''),
   exchangeInstrumentID: Number(r.exchangeInstrumentID ?? r.exchangeinstrumentid ?? 0),
+  displayName: String(r.displayName ?? r.displayname ?? ''),
   armedAt: r.armedAt ?? r.armedat,
+  firedAt: r.firedAt ?? r.firedat,
   createdAt: String(r.createdAt ?? r.createdat ?? new Date().toISOString()),
   updatedAt: String(r.updatedAt ?? r.updatedat ?? new Date().toISOString()),
   userID: String(r.userID ?? r.userid ?? ''),
   clientID: String(r.clientID ?? r.clientid ?? ''),
-  productType: (r.productType ?? r.producttype ?? 'MIS') as any,
+  productType: (r.productType ?? r.producttype ?? '') as any,
   orderUniqueIdentifier: String(r.orderUniqueIdentifier ?? r.orderuniqueidentifier ?? ''),
-  entryAppOrderID: Number(r.entryAppOrderID ?? r.entryapporderid ?? 0),
+  entryAppOrderID: r.entryAppOrderID != null && r.entryAppOrderID !== '' ? String(r.entryAppOrderID) : '0',
+  parentStatus: String(r.parentStatus ?? r.parentstatus ?? ''),
 });
 
 export const omsApi = {
-  // Check live health of oms-worker
   async checkHealth(): Promise<{ healthy: boolean; details?: any }> {
     try {
-      const res = await axios.get('/health', { timeout: 3000 });
-      return { healthy: res.status === 200, details: res.data };
+      const details = await request<{ status?: string }>(healthUrl(), { timeoutMs: 3000 });
+      return { healthy: details?.status === 'healthy', details };
     } catch {
       return { healthy: false };
     }
   },
 
-  // Fetch all users summary from backoffice API
-  async getUsers(): Promise<UserSummary[]> {
-    try {
-      const res = await axios.get('/api/backoffice/users', { timeout: 5000 });
-      if (res.data && Array.isArray(res.data.data)) {
-        return res.data.data;
-      }
-      return [];
-    } catch (err: any) {
-      console.warn('Failed to load users list:', err?.message);
-      return [];
-    }
+  async getParentOrders(params: OrderHistoryFilterParams = {}): Promise<PaginatedOrderHistoryResponse> {
+    const query = new URLSearchParams();
+    query.set('page', String(params.page || 1));
+    query.set('limit', String(params.limit || 25));
+    if (params.status && params.status !== 'ALL') query.set('status', params.status);
+    if (params.search && params.search.trim()) query.set('search', params.search.trim());
+    if (params.userId && params.userId.trim()) query.set('user_id', params.userId.trim());
+
+    const resData = await omsRequest<{
+      rows?: unknown[];
+      pagination?: PaginatedOrderHistoryResponse['pagination'];
+      stats?: PaginatedOrderHistoryResponse['stats'];
+    }>(`/backoffice/orders?${query.toString()}`);
+
+    const page = resData.data;
+    const rows = Array.isArray(page?.rows) ? page.rows : [];
+    const rawStats = page?.stats as { total?: number; counts?: Record<string, number> } | undefined;
+    const pagination = page?.pagination;
+
+    return {
+      data: rows.map((r) => normalizeParentRow(r)),
+      pagination: {
+        page: Number(pagination?.page || params.page || 1),
+        limit: Number(pagination?.limit || params.limit || 25),
+        totalRecords: Number(pagination?.totalRecords || 0),
+        totalPages: Number(pagination?.totalPages || 1),
+      },
+      stats: {
+        total: Number(rawStats?.total || 0),
+        counts: rawStats?.counts || {},
+      },
+    };
   },
 
-  // Fetch paginated master order history across all traders
-  async getOrderHistory(params: OrderHistoryFilterParams = {}): Promise<PaginatedOrderHistoryResponse> {
-    try {
-      const queryParams: Record<string, string | number> = {
-        page: params.page || 1,
-        limit: params.limit || 25,
-      };
-      if (params.status && params.status !== 'ALL') {
-        queryParams.status = params.status;
-      }
-      if (params.search && params.search.trim()) {
-        queryParams.search = params.search.trim();
-      }
-      if (params.userId && params.userId.trim()) {
-        queryParams.user_id = params.userId.trim();
-      }
-
-      const response = await axios.get('/api/backoffice/orders/history', {
-        params: queryParams,
-        timeout: 10000,
-      });
-
-      const resData = response.data || {};
-      const rows: any[] = Array.isArray(resData.data) ? resData.data : [];
-      const normalizedData = rows.map((r) => ({
-        ...normalizeOrderRow(r),
-        fullCount: Number(r.fullCount ?? r.fullcount ?? 0),
-      }));
-
-      return {
-        data: normalizedData,
-        pagination: resData.pagination || {
-          page: params.page || 1,
-          limit: params.limit || 25,
-          totalRecords: normalizedData.length > 0 ? (normalizedData[0].fullCount || 0) : 0,
-          totalPages: Math.max(1, Math.ceil((normalizedData.length > 0 ? (normalizedData[0].fullCount || 0) : 0) / (params.limit || 25))),
-        },
-        stats: resData.stats || {
-          total: 0,
-          armed: 0,
-          filled: 0,
-          cancelled: 0,
-          pending: 0,
-          exited: 0,
-          active_traders: 0,
-        },
-      };
-    } catch (err: any) {
-      throw formatApiError(err);
-    }
+  async getChildLegs(omsOrderId: string): Promise<ProtectiveBookRow[]> {
+    const query = new URLSearchParams({ oms_order_id: omsOrderId.trim() });
+    const response = await omsRequest<unknown[]>(`/backoffice/orders/leg?${query.toString()}`);
+    const list = Array.isArray(response.data) ? response.data : [];
+    return list.map((row) => normalizeOrderRow(row));
   },
 
-  // Fetch full protective legs / order book history across all statuses for a given user
   async getProtectives(userId: string, appOrderId?: string): Promise<ProtectiveBookRow[]> {
-    try {
-      const params: Record<string, string> = { user_id: userId.trim() };
-      if (appOrderId && appOrderId.trim()) {
-        params.app_order_id = appOrderId.trim();
-      }
-      const response = await axios.get('/api/backoffice/orders', { params, timeout: 10000 });
-      let list: any[] = [];
-      if (response.data && Array.isArray(response.data.data)) {
-        list = response.data.data;
-      } else if (Array.isArray(response.data)) {
-        list = response.data;
-      }
-      return list.map(normalizeOrderRow);
-    } catch (err: any) {
-      throw formatApiError(err);
-    }
+    const query = new URLSearchParams({ user_id: userId.trim() });
+    if (appOrderId && appOrderId.trim()) query.set('app_order_id', appOrderId.trim());
+    const response = await omsRequest<unknown[]>(`/backoffice/orders?${query.toString()}`);
+    const list = Array.isArray(response.data) ? response.data : [];
+    return list.map((row) => normalizeOrderRow(row));
   },
 
-  // Cancel an unplaced/armed protective leg (SL or TARGET) using OMSLEG-{id}
   async cancelProtectiveLeg(payload: CancelOrderPayload): Promise<void> {
-    try {
-      const client = createClient();
-      await client.post('/orders/smart-intraday/cancel-protective', {
-        appOrderID: payload.appOrderID,
-        clientID: payload.clientID || payload.userID,
-        userID: payload.userID,
-      });
-    } catch (err: any) {
-      throw formatApiError(err);
-    }
+    await omsClientPost('/orders/smart-intraday/cancel-protective', {
+      appOrderID: payload.appOrderID,
+      clientID: payload.clientID || payload.userID,
+      userID: payload.userID,
+      reason: payload.reason || '',
+    });
   },
 
-  // Cancel an unfilled entry order and its OMS parent
-  async cancelEntryOrder(payload: CancelOrderPayload): Promise<void> {
-    try {
-      const client = createClient();
-      await client.post('/orders/smart-intraday/cancel', {
-        appOrderID: payload.appOrderID,
-        clientID: payload.clientID || payload.userID,
-        userID: payload.userID,
-      });
-    } catch (err: any) {
-      throw formatApiError(err);
-    }
-  },
-
-  // Force exit / square-off filled quantity for an OMS order on user's behalf
-  async exitSmartIntraday(payload: ExitOrderPayload): Promise<void> {
-    try {
-      const client = createClient();
-      await client.post('/orders/smart-intraday/exit', {
-        appOrderID: payload.appOrderID,
-        clientID: payload.clientID || payload.userID,
-        userID: payload.userID,
-      });
-    } catch (err: any) {
-      throw formatApiError(err);
-    }
+  async logAuditEvent(payload: AuditEventPayload): Promise<void> {
+    await omsClientPost('/backoffice/audit/log', {
+      eventType: payload.eventType,
+      omsOrderID: payload.omsOrderID,
+      omsLegID: payload.omsLegID,
+      reason: payload.reason,
+      actor: payload.actor || 'BACKOFFICE_OPERATOR',
+      userID: payload.metadata?.userID,
+      metadata: payload.metadata,
+    });
   },
 };

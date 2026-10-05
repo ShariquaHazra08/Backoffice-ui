@@ -12,12 +12,16 @@ From this directory:
 # 1. Install dependencies (already installed)
 npm install
 
-# 2. Start the development server
+# 2a. Development (HMR) — do NOT use for Lighthouse
 npm run dev
+
+# 2b. Production serve on :3000 — use this for Lighthouse / real performance
+npm start
 ```
 
 The portal will be live at: **`http://localhost:3000`**
 
+> **Lighthouse tip:** `npm run dev` injects React Refresh and scores ~30–40. Always run `npm start` (optimized build) before auditing performance.
 ---
 
 ## 🔌 API Integration Details

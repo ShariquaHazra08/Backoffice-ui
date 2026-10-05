@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>OMS Backoffice UI</title>
+  <style>
+    @page { size: A4; margin: 16mm 16mm 18mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #1A1D23;
+      font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 11pt;
+      line-height: 1.45;
+    }
+    h1 { font-size: 20pt; margin: 0 0 4px; letter-spacing: -0.02em; }
+    h2 { font-size: 13pt; margin: 18px 0 6px; page-break-after: avoid; }
+    p { margin: 0 0 8px; }
+    ul { margin: 4px 0 10px; padding-left: 18px; }
+    li { margin: 0 0 4px; }
+    .sub { color: #5C6570; font-size: 10.5pt; margin-bottom: 14px; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9.5pt;
+      background: #F4F6F8;
+      padding: 0 3px;
+    }
+    .rule { border-top: 1px solid #E6E8EC; margin: 14px 0; }
+  </style>
+</head>
+<body>
+  <h1>OMS Backoffice UI</h1>
+  <p class="sub">How the screen works. This describes the current FirstDemat backoffice orders portal.</p>
+
+  <p>This is an internal screen for operations to inspect parent orders, open their legs on the same page, and cancel an unplaced stop-loss or target. The UI talks only to the OMS worker. It does not place orders, modify prices, cancel an entry, or square off a position.</p>
+
+  <h2>How the screen is organised</h2>
+  <p>There is one page, titled OMS BackOffice / Parent orders.</p>
+  <p>The top bar shows whether OMS is live, how many parents are still active, an auto-refresh choice, and a refresh button.</p>
+  <p>Under that, six count cards sit above a search box, a status dropdown, and a column picker. The parent table fills the rest of the page. Clicking a parent row opens that parent’s legs directly underneath it. Several parents can stay open at once.</p>
+
+  <h2>Connection</h2>
+  <p>The OMS base URL comes from <code>VITE_OMS_BASE_URL</code>. If that is empty, the UI uses <code>oms_api_url</code> from the browser, then <code>/api/v1/oms</code>.</p>
+  <p>Calls under that base send <code>X-Internal-Key</code> when <code>VITE_OMS_INTERNAL_KEY</code> or <code>oms_internal_key</code> is set.</p>
+  <p><code>GET /health</code> is called about 1.5 seconds after load, then every 20 seconds. A healthy response shows OMS live. Any failure shows OMS offline and a banner that the worker cannot be reached. Health does not use the internal key.</p>
+
+  <h2>Top bar</h2>
+  <p><strong>Active</strong> is the number of parents whose status is not <code>EXITED</code>, <code>CANCELLED</code>, or <code>FAILED</code>. That includes <code>PENDING</code>, <code>PENDING_ENTRY</code>, <code>ENTRY_PLACED</code>, <code>ENTRY_FILLED</code>, <code>SL_ARMED</code>, and <code>PROTECTIVE_ARMED</code>. The count is for the whole book, not the current page.</p>
+  <p><strong>Auto</strong> is 10s, 30s, or 60s. The choice is saved in the browser. It reloads the parent list only. It does not reload legs that are already open.</p>
+  <p>The refresh button reloads the parent list and any legs that are already open, and it recalculates which Cancel buttons are red.</p>
+
+  <h2>Count cards</h2>
+  <p><strong>Total parents</strong>, <strong>Filled</strong>, <strong>Failed</strong>, <strong>Exited</strong>, and <strong>Cancelled</strong> come from the parent-list response and cover every parent, including ones not on the current page. They do not change when a status filter or search is applied.</p>
+  <ul>
+    <li><strong>Filled</strong> is parents in <code>ENTRY_FILLED</code>.</li>
+    <li><strong>Failed</strong> is parents in <code>FAILED</code>.</li>
+    <li><strong>Exited</strong> is parents in <code>EXITED</code>.</li>
+    <li><strong>Cancelled</strong> is parents in <code>CANCELLED</code>.</li>
+  </ul>
+  <p><strong>Armed</strong> is different. It is the number of parents on the current page that have at least one leg Cancel can cancel. It is not the count of <code>SL_ARMED</code> or <code>PROTECTIVE_ARMED</code>.</p>
+
+  <h2>Finding parents</h2>
+  <p>Search waits 350ms after typing, then reloads from the first page. The worker matches the text against user id, client id, OMS order id, segment, instrument id, and entry validity.</p>
+  <p>The status dropdown filters the table. Choices are ALL plus every parent status, each with its whole-book count: <code>PENDING</code>, <code>PENDING_ENTRY</code>, <code>ENTRY_PLACED</code>, <code>ENTRY_FILLED</code>, <code>SL_ARMED</code>, <code>PROTECTIVE_ARMED</code>, <code>EXITED</code>, <code>CANCELLED</code>, and <code>FAILED</code>. Changing the status returns to page 1.</p>
+  <p>If a search or status filter returns nothing, Reset All Filters clears both.</p>
+
+  <h2>Columns</h2>
+  <p>The parent columns are OMS order id, user id, product, segment, instrument id, display name, parent status, entry validity, valid until, created, updated, and Action.</p>
+  <p>Columns can show or hide each one. Select all and Unselect all apply at once. The choice is saved in the browser. Product and parent status are plain text.</p>
+  <p>If every column is hidden, the table says No columns selected and a row click does not open legs.</p>
+  <p>The OMS order id can be copied. The copy control does not open the row.</p>
+
+  <h2>Parent table</h2>
+  <p>The default page size is 25. The footer can switch to 15, 25, 50, or 100 rows and move to the first, previous, next, or last page. The footer shows which records are on screen.</p>
+  <p>A second refresh control on the filter bar reloads the parent list only. It does not reload open legs. The top-bar refresh does both.</p>
+  <p>Parent status is not used to hide a row or to block Cancel.</p>
+
+  <h2>Opening legs</h2>
+  <p>Clicking a parent row loads <code>GET /backoffice/orders/leg?oms_order_id=</code> once and draws the legs under that row. Clicking the same parent row again closes it. Clicking a leg row closes only that parent. Other open parents stay open.</p>
+  <p>The legs table does not repeat the OMS order id. Its columns are leg id, Symphony id, role, status, side, type, quantity, filled quantity, limit price, trigger price, stop price, segment, instrument id, trail points, peak LTP, TP points, limit offset, armed at, fired at, created, and updated.</p>
+  <p>While the legs are loading, the row says Loading legs. If the parent has none, it says No legs found. An error is shown in that same row.</p>
+  <p>Open legs stay as they were at the click. They reload when the top-bar refresh is used, when the row is closed and opened again, or after a successful cancel.</p>
+  <p>To colour the Cancel buttons, the page also requests legs once for every parent currently listed. That scan is separate from opening a row.</p>
+
+  <h2>Cancel</h2>
+  <p>Every parent row has a Cancel button in the Action column, as long as that column is visible. The button does not open the legs.</p>
+  <p>The button is red when that parent has at least one leg that can be cancelled. Otherwise it stays indigo. Opening an indigo row’s popup says No legs can be cancelled for this order.</p>
+  <p>A leg can be cancelled only when all three are true:</p>
+  <ul>
+    <li>Its role is <code>SL</code> or <code>TARGET</code>. The entry leg cannot be cancelled here.</li>
+    <li>Its status is <code>PENDING</code> or <code>ARMED</code>.</li>
+    <li>Its Symphony id is empty or <code>0</code>.</li>
+  </ul>
+  <p>OMS does not require a particular parent status. The parent must exist, and the user id and client id sent with the cancel must match that parent.</p>
+  <p>The popup is titled with the OMS order id. It lists only the legs that pass the three checks, with leg id, role, and status. A header checkbox selects or clears every listed leg. One leg or several can be ticked. A reason is required. The Cancel button in the popup stays disabled until at least one leg is ticked.</p>
+  <p>Confirming sends one <code>POST /orders/smart-intraday/cancel-protective</code> per selected leg, in order. The body is <code>appOrderID</code> set to <code>OMSLEG-{leg id}</code>, plus <code>clientID</code> and <code>userID</code>. This updates the leg to <code>CANCELLED</code> inside OMS. It does not send the cancel to Symphony.</p>
+  <p>After each of those calls succeeds, the screen sends <code>POST /backoffice/audit/log</code> with event type <code>OPERATOR_CANCEL_LEG</code>, the parent id, the leg id, the reason, actor <code>BACKOFFICE_OPERATOR</code>, and the user id. The audit call is what stores the reason. If the audit call fails, the error is shown and any later selected legs are not sent. The leg whose cancel already succeeded stays cancelled.</p>
+  <p>On success, a toast names the cancelled leg, or says how many were cancelled. The toast closes itself after 4.5 seconds, or the operator can dismiss it. The parent list reloads, open legs reload, and the popup loads the remaining cancellable legs.</p>
+
+  <h2>APIs this screen calls</h2>
+  <p>All of these, except health, are under the configured OMS base and send <code>X-Internal-Key</code> when a key is set.</p>
+  <ul>
+    <li><code>GET /health</code> shows OMS live or offline.</li>
+    <li><code>GET /backoffice/orders</code> loads the parent table, pagination, and the status counts. Search, status, page, page size, and auto-refresh use this call. Query fields are <code>page</code>, <code>limit</code>, <code>status</code>, and <code>search</code>.</li>
+    <li><code>GET /backoffice/orders/leg?oms_order_id=</code> loads one parent’s legs. It is used for the red Cancel check, for an opened row, for the cancel popup, and when open legs are refreshed.</li>
+    <li><code>POST /orders/smart-intraday/cancel-protective</code> cancels one unplaced protective leg.</li>
+    <li><code>POST /backoffice/audit/log</code> stores the reason after that cancel succeeds.</li>
+  </ul>
+  <p><code>getProtectives</code> is still in the API client and is not used by this screen.</p>
+</body>
+</html>
